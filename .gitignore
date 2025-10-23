@@ -1,12 +1,3 @@
-# Windows 系不要ファイル
-AppData/
-*/AppData/
-*.log
-*.tmp
-
-# 環境ファイルなど
 .env
-
-# Python や Node.js ならこれも
+users.json
 __pycache__/
-node_modules/
