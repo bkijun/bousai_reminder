@@ -1,98 +1,72 @@
-from flask import Flask, request, abort
-import json
-import requests
-import os
+import json, requests, os, datetime
+from dotenv import load_dotenv   
 
-app = Flask(__name__)
+# ======== .env 読み込み ========
+load_dotenv()   
 
-# ======== 環境変数設定 =========
+# ======== 環境変数設定 ========
 LINE_ACCESS_TOKEN = os.getenv("LINE_ACCESS_TOKEN")
-LINE_API_URL = "https://api.line.me/v2/bot/message"
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
-
-# ======== JSONファイルでユーザー管理 =========
+LINE_API_URL = "https://api.line.me/v2/bot/message/push"
 USERS_FILE = "users.json"
 
+# ======== ユーザー読み込み =========
 def load_users():
     if not os.path.exists(USERS_FILE):
         return {}
     with open(USERS_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def save_users(users):
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
+# ======== 天気情報取得 (One Call API) ========
+def get_weather(lat, lon):
+    url = (
+        f"https://api.openweathermap.org/data/3.0/onecall?"
+        f"lat={lat}&lon={lon}&exclude=hourly,minutely,alerts&units=metric&appid={OPENWEATHER_API_KEY}&lang=ja"
+    )
+    res = requests.get(url)
+    data = res.json()
 
-# ======== LINEにメッセージを送信 =========
+    # 今日のデータを取得
+    today = data["daily"][0]
+    weather_main = today["weather"][0]["description"]  # "晴れ" など
+    temp_max = today["temp"]["max"]
+    temp_min = today["temp"]["min"]
+
+    return weather_main, temp_max, temp_min
+
+
+# ======== LINE送信 =========
 def send_message(user_id, text):
     headers = {"Authorization": f"Bearer {LINE_ACCESS_TOKEN}"}
-    data = {
-        "to": user_id,
-        "messages": [{"type": "text", "text": text}]
-    }
-    requests.post(f"{LINE_API_URL}/push", headers=headers, json=data)
+    data = {"to": user_id, "messages": [{"type": "text", "text": text}]}
+    requests.post(LINE_API_URL, headers=headers, json=data)
 
-# ======== 天気情報取得 =========
-def get_weather(lat, lon):
-    url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={OPENWEATHER_API_KEY}&lang=ja&units=metric"
-    res = requests.get(url)
-    return res.json()
+# ======== メイン処理 =========
+def main():
+    users = load_users()
+    today = datetime.date.today()
 
-# ======== Webhook受信部分 =========
-@app.route("/callback", methods=["POST"])
-def callback():
-    body = request.get_json()
-    print("Webhook受信:", json.dumps(body, ensure_ascii=False))
+    for user_id, info in users.items():
+        lat = info.get("lat")
+        lon = info.get("lon")
+        if not lat or not lon:
+            continue
 
-    # イベントを解析
-    try:
-        event = body["events"][0]
-        event_type = event["type"]
-        user_id = event["source"]["userId"]
+        weather_main, temp_max, temp_min = get_weather(lat, lon)
+        msg = f"今日の天気：{weather_main}\n最高気温：{temp_max:.1f}℃\n最低気温：{temp_min:.1f}℃\n"
 
-        users = load_users()
+        if weather_main in ["Rain", "Thunderstorm"]:
+            msg += "☔ 雨の可能性があります。防災チェックをしておきましょう。\n"
+        elif temp_max >= 35:
+            msg += "🥵 猛暑日です。熱中症に注意してください。\n"
 
-        # --- フォロー時（友だち追加） ---
-        if event_type == "follow":
-            users[user_id] = {"lat": None, "lon": None}
-            save_users(users)
-            send_message(user_id, "友だち追加ありがとうございます！📱\nあなたの地域の防災情報をお届けします。\nまず、位置情報を送信してください。")
+        # --- 月末なら追加メッセージ ---
+        tomorrow = today + datetime.timedelta(days=1)
+        if tomorrow.month != today.month:
+            msg += "\n📅 月末です。防災用品・避難経路のチェックを行いましょう！"
 
-        # --- 位置情報受信 ---
-        elif event_type == "message" and event["message"]["type"] == "location":
-            lat = event["message"]["latitude"]
-            lon = event["message"]["longitude"]
-            users[user_id] = {"lat": lat, "lon": lon}
-            save_users(users)
+        send_message(user_id, msg)
+        print(f"{user_id} に送信しました。")
 
-            # 天気取得
-            weather = get_weather(lat, lon)
-            main = weather["weather"][0]["main"]
-            temp = weather["main"]["temp"]
-
-            # 条件分岐でメッセージ作成
-            msg = f"現在の気温：{temp}℃\n天気：{main}\n"
-
-            if main in ["Rain", "Thunderstorm"]:
-                msg += "☔ 雨が降っています。防災チェックをしておきましょう。"
-            elif temp >= 33:
-                msg += "🥵 猛暑日です。熱中症に注意！"
-            else:
-                msg += "🌤 今のところ問題ありません。"
-
-            send_message(user_id, msg)
-
-    except Exception as e:
-        print("エラー:", e)
-        abort(400)
-
-    return "OK"
-
-# ======== テスト用ルート =========
-@app.route("/")
-def index():
-    return "防災Bot稼働中"
-
-# ======== メイン起動 =========
 if __name__ == "__main__":
-    app.run(port=5000)
+    main()
