@@ -2,7 +2,7 @@ name: Send Daily Weather Alert
 
 on:
   schedule:
-    - cron: "0 22 * * *"  # 日本時間で毎朝7時に実行
+    - cron: "0 9 * * *"  # 日本時間で毎朝7時に実行
   workflow_dispatch:       
 
 jobs:
